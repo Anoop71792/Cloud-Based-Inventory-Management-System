@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Create account · StockWise{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+  <div class="card shadow-sm auth-card">
+    <div class="card-body p-4 p-md-5">
+      <div class="eyebrow mb-2">GET STARTED</div>
+      <h1 class="h3 fw-bold mb-2">Create your account</h1>
+      <p class="text-secondary mb-4">Each account has its own separate inventory.</p>
+      <form method="post">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+        <div class="mb-3"><label class="form-label" for="username">Username</label><input class="form-control" id="username" name="username" required minlength="3" maxlength="40" autocomplete="username"></div>
+        <div class="mb-3"><label class="form-label" for="password">Password</label><input class="form-control" id="password" type="password" name="password" required minlength="8" autocomplete="new-password"><div class="form-text">Use at least 8 characters.</div></div>
+        <div class="mb-3"><label class="form-label" for="confirm_password">Confirm password</label><input class="form-control" id="confirm_password" type="password" name="confirm_password" required minlength="8" autocomplete="new-password"></div>
+        <button class="btn btn-primary w-100 py-2" type="submit">Create account</button>
+      </form>
+      <p class="text-secondary small mt-4 mb-0">Already registered? <a href="{{ url_for('login') }}">Log in</a></p>
+    </div>
+  </div>
+</div>
+{% endblock %}

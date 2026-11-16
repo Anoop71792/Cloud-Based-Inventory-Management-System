@@ -1,0 +1,66 @@
+---
+aws_region: ap-south-1
+
+# Override any of these without editing the file, e.g.:
+#   ansible-playbook site.yml -e aws_account_id=123456789012 -e ecr_image_tag=mysql-v2
+aws_account_id: ""
+
+ecr_repository: inventory-management-system
+
+# New MySQL image tag. The old SQLite image (tag: latest) is never touched.
+ecr_image_tag: mysql-v1
+
+ecr_registry: "{{ aws_account_id }}.dkr.ecr.{{ aws_region }}.amazonaws.com"
+
+docker_image: "{{ ecr_registry }}/{{ ecr_repository }}:{{ ecr_image_tag }}"
+
+container_name: inventory-app
+
+container_port: 5000
+
+# Application listens only on localhost (Nginx proxies to it).
+host_port: 5000
+
+app_directory: /opt/inventory-app
+
+# Set to true to run "dnf update" on every playbook run (off by default so
+# repeated runs change nothing).
+update_system_packages: false
+
+# Domain configuration
+domain_name: ""
+
+nginx_server_name: "{{ domain_name }}"
+
+nginx_proxy_port: 5000
+
+# HTTPS will be enabled after DNS verification.
+enable_https: true
+
+# ---------------------------------------------------------------------------
+# AWS RDS MySQL (private; reachable only from the EC2 security group)
+# ---------------------------------------------------------------------------
+# Use the RDS *endpoint hostname* (not an IP): TLS hostname verification needs it.
+# Example: mydb.abc123xyz.ap-south-1.rds.amazonaws.com  -> fill in after creating RDS.
+db_host: ""
+db_port: 3306
+db_name: inventorydb
+db_user: inventoryuser
+db_admin_user: dbadmin
+
+# verify-full = TLS with certificate + hostname verification (the CA bundle is baked into the image)
+db_ssl_mode: verify-full
+
+# Secrets live in the encrypted Ansible Vault file group_vars/webservers/vault.yml
+# (see vault.yml.example). Never put real values in this file.
+db_password: "{{ vault_db_password }}"
+flask_secret_key: "{{ vault_flask_secret_key }}"
+
+# Let's Encrypt configuration
+certbot_email: ""
+certbot_domain: "{{ domain_name }}"
+
+certbot_certificate: "/etc/letsencrypt/live/{{ certbot_domain }}/fullchain.pem"
+certbot_private_key: "/etc/letsencrypt/live/{{ certbot_domain }}/privkey.pem"
+
+letsencrypt_webroot: /var/www/letsencrypt

@@ -1,0 +1,16 @@
+# Local convenience only: runs the Flask container and connects it to a MySQL
+# server you already have (local install or RDS). There is no database service
+# here by design. Copy .env.example to .env and edit it first.
+services:
+  inventory-app:
+    build: .
+    image: inventory-management-system:mysql-v1
+    ports:
+      - "127.0.0.1:5000:5000"
+    env_file:
+      - .env
+    extra_hosts:
+      # Lets the container reach a MySQL server running on your own machine
+      # (set DB_HOST=host.docker.internal in .env).
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

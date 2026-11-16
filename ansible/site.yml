@@ -1,0 +1,425 @@
+---
+- name: Configure EC2 and deploy the MySQL-backed Inventory Management System
+  hosts: webservers
+  become: true
+  gather_facts: true
+
+  vars:
+    rds_admin_client_file: /run/inventory-rds-admin.cnf
+    certbot_renew_service: /etc/systemd/system/inventory-certbot-renew.service
+    certbot_renew_timer: /etc/systemd/system/inventory-certbot-renew.timer
+
+  pre_tasks:
+    - name: Validate required deployment variables
+      ansible.builtin.assert:
+        that:
+          - aws_region | length > 0
+          - aws_account_id is match('^[0-9]{12}$')
+          - ecr_repository | length > 0
+          - ecr_image_tag | length > 0
+          - db_host | length > 0
+          - db_host is not search('[/ @]')
+          - db_name is match('^[A-Za-z0-9_]+$')
+          - db_user is match('^[A-Za-z0-9_]+$')
+          - db_admin_user is match('^[A-Za-z0-9_]+$')
+          - db_port | int > 0
+          - db_ssl_mode in ['verify-full', 'disabled']
+          - domain_name | length > 0
+          - certbot_email | length > 0
+        fail_msg: >-
+          Check group_vars/all.yml. Set the AWS account ID, RDS endpoint,
+          database name/user, domain and Certbot email.
+
+    - name: Validate encrypted secrets
+      ansible.builtin.assert:
+        that:
+          - vault_rds_master_password is defined
+          - vault_rds_master_password | string | length > 0
+          - vault_db_password is defined
+          - vault_db_password | string | length > 0
+          - vault_flask_secret_key is defined
+          - vault_flask_secret_key | string | length >= 32
+        fail_msg: >-
+          Add the RDS master password, application DB password and Flask secret
+          to encrypted group_vars/webservers/vault.yml.
+      no_log: true
+
+  tasks:
+    # 1. Install required packages
+
+    - name: Optionally update operating system packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
+      when: update_system_packages | default(false) | bool
+
+    - name: Install deployment packages
+      ansible.builtin.dnf:
+        name:
+          - docker
+          - nginx
+          - awscli
+          - mariadb105
+          - certbot
+        state: present
+        update_cache: true
+
+    - name: Start and enable Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Start and enable Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Create application directory
+      ansible.builtin.file:
+        path: "{{ app_directory }}"
+        state: directory
+        owner: ec2-user
+        group: ec2-user
+        mode: "0755"
+
+    # 2. Verify EC2 IAM role
+
+    - name: Verify EC2 instance role identity
+      ansible.builtin.command:
+        argv:
+          - aws
+          - sts
+          - get-caller-identity
+          - --query
+          - Account
+          - --output
+          - text
+      register: ec2_aws_account
+      changed_when: false
+
+    - name: Ensure EC2 uses the expected AWS account
+      ansible.builtin.assert:
+        that:
+          - ec2_aws_account.stdout | trim == aws_account_id | string
+        fail_msg: >-
+          EC2 instance role belongs to a different AWS account.
+
+    # 3. Check RDS connectivity
+
+    - name: Wait for RDS MySQL endpoint
+      ansible.builtin.wait_for:
+        host: "{{ db_host }}"
+        port: "{{ db_port | int }}"
+        state: started
+        timeout: 60
+        sleep: 5
+
+    # 4. Create database and application user
+
+    - name: Provision RDS database and application account
+      block:
+        - name: Create temporary RDS administrator configuration
+          ansible.builtin.copy:
+            dest: "{{ rds_admin_client_file }}"
+            content: |
+              [client]
+              user={{ db_admin_user }}
+              password="{{ vault_rds_master_password | replace('\\', '\\\\') | replace('"', '\\"') }}"
+              host={{ db_host }}
+              port={{ db_port }}
+              protocol=tcp
+            owner: root
+            group: root
+            mode: "0600"
+          no_log: true
+
+        - name: Verify RDS administrator authentication
+          ansible.builtin.command:
+            argv:
+              - mysql
+              - "--defaults-extra-file={{ rds_admin_client_file }}"
+              - --batch
+              - --skip-column-names
+              - --execute
+              - "SELECT 1;"
+          register: mysql_auth_test
+          changed_when: false
+          failed_when: mysql_auth_test.rc != 0
+
+        - name: Create database and restricted application user
+          ansible.builtin.command:
+            argv:
+              - mysql
+              - "--defaults-extra-file={{ rds_admin_client_file }}"
+              - --batch
+              - --skip-column-names
+            stdin: |
+              CREATE DATABASE IF NOT EXISTS `{{ db_name }}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+              CREATE USER IF NOT EXISTS '{{ db_user }}'@'%' IDENTIFIED BY '{{ vault_db_password | replace('\\', '\\\\') | replace("'", "\\'") }}' REQUIRE SSL;
+              ALTER USER '{{ db_user }}'@'%' IDENTIFIED BY '{{ vault_db_password | replace('\\', '\\\\') | replace("'", "\\'") }}' REQUIRE SSL;
+              GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON `{{ db_name }}`.* TO '{{ db_user }}'@'%';
+              FLUSH PRIVILEGES;
+          register: mysql_provision_result
+          changed_when: false
+          no_log: true
+
+      rescue:
+        - name: Stop deployment with a safe database error message
+          ansible.builtin.fail:
+            msg: >-
+              RDS database provisioning failed. Check the RDS administrator
+              credentials, MySQL authentication and database privileges.
+              No password or SQL output has been printed.
+
+      always:
+        - name: Remove temporary RDS administrator configuration
+          ansible.builtin.file:
+            path: "{{ rds_admin_client_file }}"
+            state: absent
+
+    # 5. Authenticate to ECR
+
+    - name: Authenticate Docker to Amazon ECR
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws ecr get-login-password --region '{{ aws_region }}' |
+          docker login --username AWS --password-stdin '{{ ecr_registry }}'
+      args:
+        executable: /bin/bash
+      changed_when: false
+      no_log: true
+
+    # 6. Pull Docker image
+
+    - name: Pull MySQL application image from ECR
+      ansible.builtin.command:
+        argv:
+          - docker
+          - pull
+          - "{{ docker_image }}"
+      register: docker_pull
+      changed_when: "'Downloaded newer image' in docker_pull.stdout or 'Pull complete' in docker_pull.stdout"
+
+    # 7. Replace and start application container
+
+    - name: Remove existing application container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - rm
+          - -f
+          - "{{ container_name }}"
+      register: remove_container
+      failed_when: false
+      changed_when: remove_container.rc == 0
+
+    - name: Start Inventory Management System container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --detach
+          - --name
+          - "{{ container_name }}"
+          - --restart
+          - unless-stopped
+          - --publish
+          - "127.0.0.1:{{ host_port }}:{{ container_port }}"
+          - --env
+          - "SECRET_KEY={{ vault_flask_secret_key }}"
+          - --env
+          - "COOKIE_SECURE={{ '1' if enable_https | bool else '0' }}"
+          - --env
+          - "DB_HOST={{ db_host }}"
+          - --env
+          - "DB_PORT={{ db_port }}"
+          - --env
+          - "DB_NAME={{ db_name }}"
+          - --env
+          - "DB_USER={{ db_user }}"
+          - --env
+          - "DB_PASSWORD={{ vault_db_password }}"
+          - --env
+          - "DB_SSL_MODE={{ db_ssl_mode }}"
+          - "{{ docker_image }}"
+      no_log: true
+
+    # 8. Verify application
+
+    - name: Wait for Flask health endpoint and database initialization
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ host_port }}/healthz"
+        method: GET
+        status_code: 200
+      register: app_health
+      retries: 24
+      delay: 5
+      until: app_health.status == 200
+
+    # 9. Prepare HTTPS
+
+    - name: Create Let's Encrypt webroot directory
+      ansible.builtin.file:
+        path: "{{ letsencrypt_webroot }}/.well-known/acme-challenge"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: enable_https | bool
+
+    - name: Check whether Let's Encrypt certificate exists
+      ansible.builtin.stat:
+        path: "{{ certbot_certificate }}"
+      register: existing_certificate
+      when: enable_https | bool
+
+    - name: Install HTTP Nginx configuration before certificate issuance
+      ansible.builtin.template:
+        src: inventory-app-http.conf.j2
+        dest: /etc/nginx/conf.d/inventory-app.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: enable_https | bool and not existing_certificate.stat.exists
+      notify: Validate and reload Nginx
+
+    - name: Apply HTTP configuration before certificate issuance
+      ansible.builtin.meta: flush_handlers
+
+    - name: Request Let's Encrypt certificate
+      ansible.builtin.command:
+        argv:
+          - certbot
+          - certonly
+          - --webroot
+          - --webroot-path
+          - "{{ letsencrypt_webroot }}"
+          - --domain
+          - "{{ certbot_domain }}"
+          - --non-interactive
+          - --agree-tos
+          - --no-eff-email
+          - --email
+          - "{{ certbot_email }}"
+      when: enable_https | bool and not existing_certificate.stat.exists
+
+    # 10. Configure final Nginx settings
+
+    - name: Install HTTPS Nginx configuration
+      ansible.builtin.template:
+        src: inventory-app-https.conf.j2
+        dest: /etc/nginx/conf.d/inventory-app.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: enable_https | bool
+      notify: Validate and reload Nginx
+
+    - name: Install HTTP-only Nginx configuration
+      ansible.builtin.template:
+        src: inventory-app-http.conf.j2
+        dest: /etc/nginx/conf.d/inventory-app.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: not enable_https | bool
+      notify: Validate and reload Nginx
+
+    - name: Apply final Nginx configuration
+      ansible.builtin.meta: flush_handlers
+
+    # 11. Configure certificate renewal
+
+    - name: Create Certbot deploy hook directory
+      ansible.builtin.file:
+        path: /etc/letsencrypt/renewal-hooks/deploy
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: enable_https | bool
+
+    - name: Install Nginx reload deploy hook
+      ansible.builtin.copy:
+        dest: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -e
+          /usr/sbin/nginx -t
+          /usr/bin/systemctl reload nginx
+      when: enable_https | bool
+
+    - name: Install Certbot renewal service
+      ansible.builtin.copy:
+        dest: "{{ certbot_renew_service }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Renew Let's Encrypt certificates
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/certbot renew --quiet
+      when: enable_https | bool
+
+    - name: Install Certbot renewal timer
+      ansible.builtin.copy:
+        dest: "{{ certbot_renew_timer }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run Certbot renewal twice daily
+
+          [Timer]
+          OnCalendar=*-*-* 00,12:00:00
+          RandomizedDelaySec=3600
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      when: enable_https | bool
+
+    - name: Enable Certbot renewal timer
+      ansible.builtin.systemd:
+        name: inventory-certbot-renew.timer
+        daemon_reload: true
+        enabled: true
+        state: started
+      when: enable_https | bool
+
+    # 12. Final verification
+
+    - name: Verify public HTTPS endpoint
+      ansible.builtin.uri:
+        url: "https://{{ certbot_domain }}/healthz"
+        method: GET
+        status_code: 200
+        validate_certs: true
+      register: https_health
+      retries: 8
+      delay: 5
+      until: https_health.status == 200
+      when: enable_https | bool
+
+    - name: Verify public HTTP endpoint when HTTPS is disabled
+      ansible.builtin.uri:
+        url: "http://{{ domain_name }}/healthz"
+        method: GET
+        status_code: 200
+      when: not enable_https | bool
+
+  handlers:
+    - name: Validate and reload Nginx
+      ansible.builtin.shell: nginx -t && systemctl reload nginx
+      args:
+        executable: /bin/bash

@@ -1,0 +1,8 @@
+# RDS master password
+vault_rds_master_password: "REPLACE_WITH_RDS_MASTER_PASSWORD"
+
+# Separate password for Flask application database user
+vault_db_password: "REPLACE_WITH_APPLICATION_DB_PASSWORD"
+
+# Flask application secret (minimum 32 characters)
+vault_flask_secret_key: "REPLACE_WITH_LONG_RANDOM_SECRET_AT_LEAST_32_CHARACTERS"

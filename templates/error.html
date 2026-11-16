@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}Error {{ code }} · StockWise{% endblock %}
+{% block content %}
+<div class="empty-state py-5"><div class="eyebrow mb-2">ERROR {{ code }}</div><h1 class="h3 fw-bold">Something went wrong</h1><p class="text-secondary">{{ message }}</p><a class="btn btn-primary" href="{{ url_for('dashboard') if session.get('user_id') else url_for('login') }}">Go back</a></div>
+{% endblock %}

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · StockWise{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+  <div><div class="eyebrow mb-1">OVERVIEW</div><h1 class="h2 fw-bold mb-1">Inventory dashboard</h1><p class="text-secondary mb-0">Track products, stock levels, and inventory value.</p></div>
+  <a class="btn btn-primary" href="{{ url_for('add_product') }}">＋ Add product</a>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-6 col-xl-3"><div class="stat-card"><div class="stat-label">Products</div><div class="stat-value">{{ stats.product_count }}</div><div class="stat-note">Unique items in inventory</div></div></div>
+  <div class="col-6 col-xl-3"><div class="stat-card"><div class="stat-label">Units in stock</div><div class="stat-value">{{ stats.total_units }}</div><div class="stat-note">Total available quantity</div></div></div>
+  <div class="col-6 col-xl-3"><div class="stat-card"><div class="stat-label">Inventory value</div><div class="stat-value">₹{{ "%.2f"|format(stats.inventory_value) }}</div><div class="stat-note">Quantity × unit price</div></div></div>
+  <div class="col-6 col-xl-3"><div class="stat-card {% if stats.low_stock_count %}stat-warning{% endif %}"><div class="stat-label">Low-stock items</div><div class="stat-value">{{ stats.low_stock_count }}</div><div class="stat-note">At or below reorder level</div></div></div>
+</div>
+
+<div class="card border-0 shadow-sm">
+  <div class="card-body p-3 p-md-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <h2 class="h5 fw-bold mb-0">Products</h2>
+      <span class="text-secondary small">{{ products|length }} shown</span>
+    </div>
+    <form class="row g-2 mb-3" method="get" action="{{ url_for('dashboard') }}">
+      <div class="col-md"><input class="form-control" name="q" value="{{ search }}" placeholder="Search name, SKU, or category"></div>
+      <div class="col-md-4"><select class="form-select" name="category"><option value="">All categories</option>{% for item in categories %}<option value="{{ item.category }}" {% if category_filter == item.category %}selected{% endif %}>{{ item.category }}</option>{% endfor %}</select></div>
+      <div class="col-auto"><button class="btn btn-outline-primary" type="submit">Filter</button></div>
+      <div class="col-auto"><a class="btn btn-outline-secondary" href="{{ url_for('dashboard') }}">Reset</a></div>
+    </form>
+    {% if products %}
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Price</th><th>Qty</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
+        <tbody>
+        {% for product in products %}
+          <tr>
+            <td class="fw-semibold">{{ product.name }}</td><td><code>{{ product.sku }}</code></td><td>{{ product.category }}</td>
+            <td>₹{{ "%.2f"|format(product.price) }}</td><td>{{ product.quantity }}</td>
+            <td>{% if product.quantity <= product.reorder_level %}<span class="badge text-bg-warning">Low stock</span>{% else %}<span class="badge text-bg-success">In stock</span>{% endif %}</td>
+            <td class="text-end text-nowrap">
+              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('edit_product', product_id=product.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('delete_product', product_id=product.id) }}" class="d-inline" onsubmit="return confirm('Delete this product? This cannot be undone.');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <div class="empty-state"><div class="empty-icon">▦</div><h3 class="h5 fw-bold">No products found</h3><p class="text-secondary mb-3">{% if search or category_filter %}Try changing your search or filter.{% else %}Add your first product to start tracking stock.{% endif %}</p>{% if not search and not category_filter %}<a class="btn btn-primary" href="{{ url_for('add_product') }}">Add first product</a>{% endif %}</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

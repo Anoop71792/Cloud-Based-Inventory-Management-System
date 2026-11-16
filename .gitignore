@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+instance/
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+certs/
+
+# Ansible secrets and generated files
+ansible/.vault_pass*
+ansible/**/vault-password*
+ansible/**/vault.yml
+*.retry
+
+# Terraform generated files and state
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.plan
+*.tfvars
+*.tfvars.json
+crash.log
+crash.*.log
+# IDE and editor files
+.vscode/
+.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
