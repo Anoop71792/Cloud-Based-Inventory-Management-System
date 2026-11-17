@@ -153,6 +153,12 @@ The application uses a three-layer deployment architecture.
 11. Temporary SSH access is revoked.
 12. Temporary deployment files are removed.
 
+The following diagram illustrates the AWS infrastructure, application request flow, and automated CI/CD deployment pipeline.
+
+### AWS Architecture Diagram
+
+![StockWise AWS Architecture](assets/aws-architecture.png)
+
 ---
 
 ## 5. Application Components
@@ -194,6 +200,14 @@ The application startup process performs operations including:
 5. Starting Gunicorn after successful database initialization.
 
 Application records are stored in Amazon RDS rather than inside the Docker container.
+
+## Application User Interface
+
+The following screenshot shows the deployed StockWise inventory management dashboard, including inventory statistics, product management, search, and category filtering.
+
+### Inventory Dashboard
+
+![StockWise Inventory Dashboard](assets/inventory-dashboard.png)
 
 ---
 
