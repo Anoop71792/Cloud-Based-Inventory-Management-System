@@ -1,14 +1,42 @@
+# Python environments
+
 .venv/
 venv/
-__pycache__/
-*.py[cod]
+
+# Python cache
+
+\*_/**pycache**/
+_.py[cod]
+.pytest_cache/
+
+# Environment and secrets
+
 .env
-.env.*
+.env.\*
+_.pem
+_.key
+
+# Git
+
 .git/
 .gitignore
 .github/
-.pytest_cache/
+
+# Infrastructure and deployment
+
+terraform/
 ansible/
-attachment.txt
-*.pem
+eee
+# Tests
+
+tests/
+
+# Documentation
+
 README.md
+
+# Other unnecessary files
+
+attachment.txt
+_.log
+_.retry
